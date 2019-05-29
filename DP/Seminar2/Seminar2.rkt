@@ -1,0 +1,306 @@
+#lang racket
+;----------- Podatkovni tipi -----------;
+(struct int (n) #:transparent)
+(struct true () #:transparent)
+(struct false () #:transparent)
+(struct frac (e1 e2) #:transparent)
+(struct :: (e1 e2) #:transparent)
+(struct empty () #:transparent)
+
+;------------- Nadzor toka -------------;
+;--- Vejitev
+(struct if-then-else (cond e1 e2) #:transparent)
+
+;--- Preverjanje tipov
+(struct is-int (e1) #:transparent)
+(struct is-bool (e1) #:transparent)
+(struct is-frac (e1) #:transparent)
+(struct is-list (e1) #:transparent)
+
+;--- Aritmetične operacije
+(struct add (e1 e2) #:transparent)
+(struct mul (e1 e2) #:transparent)
+(struct gt (e1 e2) #:transparent)
+
+;--- Logične operacije
+(struct both (e1 e2) #:transparent)
+(struct any (e1 e2) #:transparent)
+(struct ! (e1) #:transparent)
+
+;--- Operacije nad seznami
+(struct hd (x) #:transparent)
+(struct tl (x) #:transparent)
+(struct is-empty (x) #:transparent)
+(struct @ (a b) #:transparent)
+
+;--- Operacije nad ulomki
+(struct numerator (e1) #:transparent)
+(struct denominator (e1) #:transparent)
+
+;---- spremenljivke
+(struct var (s e1 e2) #:transparent)
+(struct valof (s) #:transparent)
+
+;---- funkcije
+(struct fun (name fargs body) #:transparent)
+(struct proc (name body) #:transparent)
+(struct envelope (env f) #:transparent)
+(struct call (e args) #:transparent)
+
+;------------- Interpreter -------------;
+(define (mi e env)
+   (cond
+    ;--- Podatkovni tipi ---
+    ; Izhodi za podatkovne tipe
+    [(int? e) e]
+    [(true? e) e]
+    [(false? e) e]
+    [(frac? e)
+     (let ([v1 (mi (frac-e1 e) env)]
+           [v2 (mi (frac-e2 e) env)])
+       (if (and (int? v1) (int? v2))
+           (if (> (int-n v2) 0) (frac v1 v2) (error "Division by 0"))
+           (error "Both values of 'frac' must be of type 'int'")))]
+    [(::? e)
+     (let ([v1 (mi (::-e1 e) env)]
+           [v2 (mi (::-e2 e) env)])
+       (cond [(not (or (empty? v2) (::? v2))) (error "Second parameter of '::' must either be '::' or 'empty'")]
+             [(or (empty? v1) (::? v1)) (error "First parameter of '::' can't be of '::' or 'empty'")]
+             [#t (:: v1 v2)]))]
+    [(empty? e) e]
+    
+    ;--- Nadzor toka ---
+    ; Vejitev (je defineran samo za true pa false; ali za true in pa karkoli)
+    [(if-then-else? e)
+       (if (true? (mi (if-then-else-cond e) env)) (mi (if-then-else-e1 e) env) (mi (if-then-else-e2 e) env))]
+    
+    ; Preverjanje tipov
+    [(is-int? e)
+     (let ([v (mi (is-int-e1 e) env)])
+       (if (int? v) (true) (false)))]
+    [(is-bool? e)
+     (let ([v (mi (is-bool-e1 e) env)])
+       (if (or (true? v) (false? v)) (true) (false)))]
+    [(is-frac? e)
+     (let ([v (mi (is-frac-e1 e) env)])
+       (if (frac? v) (true) (false)))]
+    [(is-list? e)
+     (let ([v (mi (is-list-e1 e) env)])
+       (if (or (::? v) (empty? v)) (true) (false)))]
+
+    ; Aritmeticne operacije
+    [(add? e)
+     (let ([v1 (mi (add-e1 e) env)]
+           [v2 (mi (add-e2 e) env)])
+       (cond
+         [(and (int? v1) (int? v2)) (int (+ (int-n v1) (int-n v2)))]
+         [(and (frac? v1) (frac? v2))
+          (letrec ([num (+ (* (int-n (frac-e1 v1)) (int-n (frac-e2 v2))) (* (int-n (frac-e2 v1)) (int-n (frac-e1 v2))))]
+                [den (* (int-n (frac-e2 v1)) (int-n (frac-e2 v2)))]
+                [div (gcd num den)])
+                 (frac (int (/ num div)) (int (/ den div))))]
+         [#t (error "Both parameters for 'add' must be of type 'int' or either 'frac'")]))]
+    [(mul? e)
+     (let ([v1 (mi (mul-e1 e) env)]
+           [v2 (mi (mul-e2 e) env)])
+       (cond
+         [(and (int? v1) (int? v2)) (int (* (int-n v1) (int-n v2)))]
+         [(and (frac? v1) (frac? v2))
+          (letrec ([num (* (int-n (frac-e1 v1)) (int-n (frac-e1 v2)))]
+                [den (* (int-n (frac-e2 v1)) (int-n (frac-e2 v2)))]
+                [div (gcd num den)])
+                 (frac (int (/ num div)) (int (/ den div))))]
+         [#t (error "Both parameters for 'mul' must be of type 'int' or either 'frac'")]))]
+    [(gt? e)
+     (let ([v1 (mi (gt-e1 e) env)]
+           [v2 (mi (gt-e2 e) env)])
+       (cond
+         [(and (int? v1) (int? v2)) (if (> (int-n v1) (int-n v2)) (true) (false))]
+         [(and (frac? v1) (frac? v2))
+          (if (> (/ (int-n (frac-e1 v1)) (int-n (frac-e2 v1))) (/ (int-n (frac-e1 v2)) (int-n (frac-e2 v2))))
+              (true)
+              (false))]
+         [#t (error "Both parameters for 'gt' must be of type 'int' or either 'frac'")]))]
+    
+    ; Logične operacije
+    [(both? e)
+     (let ([v1 (mi (both-e1 e) env)]
+           [v2 (mi (both-e2 e) env)])
+       (if (and (or (true? v1) (false? v1)) (or (true? v2) (false? v2)))
+           (if (and (true? v1) (true? v2)) (true) (false))
+           (error "Both parameters for 'both' must be of type 'true' or 'false'")))]
+    [(any? e)
+     (let ([v1 (mi (any-e1 e) env)]
+           [v2 (mi (any-e2 e) env)])
+       (if (and (or (true? v1) (false? v1)) (or (true? v2) (false? v2)))
+           (if (or (true? v1) (true? v2)) (true) (false))
+           (error "Both parameters for 'both' must be of type 'true' or 'false'")))]
+    [(!? e)
+     (let ([v1 (mi (!-e1 e) env)])
+       (if (or (true? v1) (false? v1))
+           (if (true? v1) (false) (true))
+           (error "Parameter for '!' must be of type 'true' or 'false'")))]
+
+    ; Operacije nad seznami
+    [(hd? e)
+     (let ([v1 (mi (hd-x e) env)])
+       (cond [(::? v1) (::-e1 v1)]
+           [(empty? v1) (error "'hd' is not defined over empty list")]
+           [#t (error "Parameter for 'hd' must be of type '::'")]))]
+    [(tl? e)
+     (let ([v1 (mi (tl-x e) env)])
+       (cond [(::? v1) (::-e2 v1)]
+           [(empty? v1) (error "'tl' is not defined over empty list")]
+           [#t (error "Parameter for 'hd' must be of type '::'")]))]
+    [(is-empty? e)
+     (let ([v1 (mi (is-empty-x e) env)])
+       (cond [(empty? v1) (true)]
+           [(::? v1) (false)]
+           [#t (error "Parameter for 'is-empty' must be of type '::' or 'empty'")]))]
+    [(@? e)
+     (let ([v1 (mi (@-a e) env)]
+           [v2 (mi (@-b e) env)])
+       (cond [(and (::? v1) (::? v2)) (:: (::-e1 v1) (mi (@ (::-e2 v1) v2) env))]
+             [(and (empty? v1) (::? v2)) v2]
+             [(and (empty? v2) (::? v1)) v1]
+             [(and (empty? v2) (empty? v1)) (empty)]
+             [#t (error "Both parameters for '@' must be of type '::' or 'empty'")]))]
+
+    
+    ; Operacije nad ulomki
+    [(numerator? e)
+     (let ([v1 (mi (numerator-e1 e) env)])
+       (if (frac? v1)
+           (frac-e1 v1)
+           (error "Parameter for 'numerator' must be of type 'frac'")))]
+    [(denominator? e)
+     (let ([v1 (mi (denominator-e1 e) env)])
+       (if (frac? v1)
+           (frac-e2 v1)
+           (error "Parameter for 'denominator' must be of type 'frac'")))]
+
+    ;---- Spremenljivke ---
+    [(var? e)
+     (let ([v1 (mi (var-e1 e) env)])
+       (mi (var-e2 e) (cons (cons (var-s e) v1) env)))]
+    [(valof? e)
+     (let ([v1 (assoc (valof-s e) env)])
+       (if v1
+           (cdr v1)
+           (error (valof-s e) "is not defined")))]
+
+    ;--- Funkcije ---
+    [(proc? e) e]
+    [(fun? e)
+     (if (check-duplicates (fun-fargs e))
+         (error "Arguments of a function must be unique")
+         (envelope env e))]
+    [(call? e)
+      (let ([envl (mi (call-e e) env)])
+        (cond
+          [(envelope? envl)
+           (letrec ([args (map (lambda (x) (mi x env)) (call-args e))] 
+                    [fn (envelope-f envl)]
+                    [fargs (fun-fargs fn)]
+                    [argslist (if (= (length args) (length fargs)) (map cons fargs args) (error "Number of given arguments must match the definition"))]
+                    [envr (envelope-env envl)])
+               (if (null? fargs)
+                 (mi (fun-body fn) (append argslist envr))
+                 (mi (fun-body fn) (append argslist (cons (cons (fun-name fn) envl) envr)))))]
+             
+          [(and (proc? envl) (null? (call-args e))) (mi (proc-body envl) (cons (cons (proc-name envl) envl) env))]
+          [(and (proc? envl) (not (null? (call-args e)))) (error "Arguments of procedure must be empty")]
+          ))]
+    ))
+
+;------------- Makri -------------;
+; DELA
+(define (to-frac e1)
+  (frac e1 (int 1)))
+
+;DELA
+(define (lt e1 e2)
+     (gt e2 e1))
+
+; 2x evalvera
+(define (inv e1)
+  (var "e1" e1 (
+    (frac (denominator (valof "e1")) (numerator (valof "e1"))))))
+
+; ni delou- je spremenjen
+(define (~ e1)
+  (mul (int -1) e1))
+
+; 2x evalvera
+(define (same e1 e2)
+  (var "e1" e1
+       (var "e2" e2
+            (! (any (gt (valof "e1") (valof "e2")) (gt (valof "e2") (valof "e1")))))))
+
+;------------- Testi -------------;
+;(printf "Podatkovni tipi:\n")
+;;(printf "::: ~a\n" (equal? (mi (:: (empty) (int 2)) 0) (:: (int 2) (error))))
+;;(printf "::: ~a\n" (equal? (mi (:: (int 2) (int 2)) 0) (:: (int 2) (error))))
+;(printf "Preverjanje tipov:\n")
+;(printf "is-int: ~a\n" (equal? (mi (is-int (int 3)) null) (true)))
+;(printf "is-int: ~a\n" (equal? (mi (is-int (true)) null) (false)))
+;(printf "is-bool: ~a\n" (equal? (mi (is-bool (false)) null) (true)))
+;(printf "is-bool: ~a\n" (equal? (mi (is-bool (int 0)) null) (false)))
+;(printf "is-bool: ~a\n" (equal? (mi (is-bool (is-int (true))) null) (true)))
+;(printf "is-frac: ~a\n" (equal? (mi (is-frac (frac (int 1) (int 2))) null) (true)))
+;(printf "is-frac: ~a\n" (equal? (mi (is-frac (true)) null) (false)))
+;(printf "is-list: ~a\n" (equal? (mi (is-list (empty)) null) (true)))
+;(printf "is-list: ~a\n" (equal? (mi (is-list (int 2)) null) (false)))
+;(printf "is-list: ~a\n" (equal? (mi (is-list (:: (int 2) (empty))) null) (true)))
+;(printf "is-list: ~a\n" (equal? (mi (is-list (:: (true) (:: (int 2) (empty)))) null) (true)))
+;(printf "Vejitve:\n")
+;(printf "if-then-else: ~a\n" (equal? (mi (if-then-else (true) (int 1) (int 0)) null) (int 1)))
+;(printf "if-then-else: ~a\n" (equal? (mi (if-then-else (is-int (int 1)) (int 1) (int 0)) null) (int 1)))
+;(printf "if-then-else: ~a\n" (equal? (mi (if-then-else (false) (int 1) (int 0)) null) (int 0)))
+;(printf "if-then-else: ~a\n" (equal? (mi (if-then-else (int 1) (int 1) (int 0)) null) (int 0)))
+;
+;(printf "Aritmeticni izrazi:\n")
+;(printf "add: ~a\n" (equal? (mi (add (int 5) (add (int 3) (int 2))) null) (int 10)))
+;(printf "add: ~a\n" (equal? (mi (add (frac (int 2) (int 3)) (frac (int 5) (int 6))) null) (frac (int 3) (int 2))))
+;(printf "add: ~a\n" (equal? (mi (add (frac (int 2) (int 4)) (add (frac (int 3) (int 5)) (frac (int 1) (int 7)))) null) (frac (int 87) (int 70))))
+;(printf "mul: ~a\n" (equal? (mi (mul (int 5) (add (int 3) (int 2))) null) (int 25)))
+;(printf "mul: ~a\n" (equal? (mi (mul (frac (int 2) (int 3)) (frac (int 5) (int 6))) null) (frac (int 5) (int 9))))
+;(printf "mul: ~a\n" (equal? (mi (mul (frac (int 1) (int 3)) (mul (frac (int 1) (int 5)) (frac (int 1) (int 7)))) null) (frac (int 1) (int 105))))
+;(printf "gt: ~a\n" (equal? (mi (gt (int 5) (mul (int 3) (int 2))) null) (false)))
+;(printf "gt: ~a\n" (equal? (mi (gt (frac (int 2) (int 3)) (frac (int 5) (int 41))) null) (true)))
+;(printf "gt: ~a\n" (equal? (mi (gt (frac (int 1) (int 3)) (add (frac (int 1) (int 5)) (frac (int 1) (int 7)))) null) (false)))
+;
+;(printf "Logične operacije:\n")
+;(printf "both: ~a\n" (equal? (mi (both (true) (both (true) (true))) null) (true)))
+;(printf "both: ~a\n" (equal? (mi (both (true) (both (true) (false))) null) (false)))
+;(printf "any: ~a\n" (equal? (mi (any (true) (both (false) (true))) null) (true)))
+;(printf "!: ~a\n" (equal? (mi (! (gt (int 3) (int 2))) null) (false)))
+;
+;
+;(printf "Operacije nad seznami:\n")
+;(printf "hd: ~a\n" (equal? (mi (hd (:: (true) (:: (int 2) (empty)))) null) (true)))
+;(printf "tl: ~a\n" (equal? (mi (tl (:: (int 2) (empty))) null) (empty)))
+;(printf "tl: ~a\n" (equal? (mi (hd (tl (:: (true) (:: (int 2) (empty))))) null) (int 2)))
+;(printf "is-empty: ~a\n" (equal? (mi (is-empty (tl (:: (int 2) (empty)))) null) (true)))
+;(printf "is-empty: ~a\n" (equal? (mi (is-empty (tl (:: (true) (:: (int 2) (empty))))) null) (false)))
+;(printf "@: ~a\n" (equal? (mi (@ (tl (:: (int 2) (empty))) (:: (int 15) (empty))) null) (:: (int 15) (empty))))
+;(printf "@: ~a\n" (equal? (mi (@ (:: (frac (int 1) (int 2)) (:: (true) (:: (int 2) (empty)))) (:: (add (int 7) (int 8)) (:: (false) (empty)))) null)
+;                          (:: (frac (int 1) (int 2)) (:: (true) (:: (int 2) (:: (int 15) (:: (false) (empty))))))))
+;
+;(printf "Spremenljivke:\n")
+;(printf "var in valof: ~a\n" (equal? (mi (var "x" (int 3) (valof "x")) null) (int 3)))
+;;(printf "var in valof: ~a\n" (equal? (mi (var "x" (int 3) (valof "y")) null) (int 3)))
+;(printf "var in valof: ~a\n" (equal? (mi (var "x" (int 3) (var "y" (int 4) (var "x" (int 5) (valof "y")))) null) (int 4)))
+;(printf "var in valof: ~a\n" (equal? (mi (var "x" (int 3) (var "y" (int 4) (var "x" (int 5) (valof "x")))) null) (int 5)))
+;(printf "var in valof: ~a\n" (equal? (mi (var "x" (int 3) (var "x" (int 15) (add (valof "x") (int 15)))) null) (int 30)))
+;(printf "var in valof: ~a\n" (equal? (mi (var "x" (int 3) (var "x" (int 15) (add (var "x" (int 30) (valof "x")) (int 15)))) null) (int 45)))
+;(printf "var in valof: ~a\n" (equal? (mi (var "x" (int 3) (var "x" (int 6) (add (var "x" (int 30) (valof "x")) (valof "x")))) null) (int 36)))
+;;(printf "var in valof: ~a\n" (equal? (mi (var "x" (int 3) (var "x" (int 6) (add (var "y" (int 30) (valof "x")) (valof "y")))) null) (int 36)))
+;
+;(printf "Funkcije:\n")
+;(printf "call and fun: ~a\n" (equal? (mi (var "x" (int 50) (var "z" (int 100) (call (fun "sestevanje" (list "x" "y") (add (valof "y") (valof "z"))) (list (int 1) (add (int 1) (int 1)))))) null) (int 102)))
+;(printf "call and fun: ~a\n" (equal? (mi (var "x" (int 50) (var "z" (int 100) (var "sestevanje" (fun "sestevanje" (list "x" "y") (add (valof "y") (valof "z"))) (call (valof "sestevanje") (list (int 1) (add (int 1) (int 1))))))) null) (int 102)))
+;(printf "call and fun: ~a\n" (equal? (mi (var "x" (int 50) (var "z" (int 100) (call (fun "sestevanje" null (add (valof "x") (valof "z"))) null))) null) (int 150)))
+;(printf "recursive fun: ~a\n" (equal? (mi (var "x" (int 50) (var "z" (int 100) (call (fun "fak" (list "x") (if-then-else (gt (int 1) (valof "x")) (int 1) (mul (valof "x") (call (valof "fak") (list (add (valof "x") (int -1))))))) (list (add (int 5) (int 1)))))) null) (int 720)))
+;(printf "call and proc: ~a\n" (equal? (mi (var "x" (int 5) (var "z" (int 10) (call (proc "fak" (add (valof "x") (int -1))) null))) null) (int 4)))
+;(printf "recursive proc: ~a\n" (equal? (mi (var "x" (int 6) (var "z" (int 10) (call (proc "fak" (if-then-else (gt (int 1) (valof "x")) (int 1) (mul (valof "x") (var "x" (add (valof "x") (int -1)) (call (valof "fak") null))))) null))) null) (int 720)))
